@@ -99,6 +99,10 @@ void NativeEngine::GameLoop() {
     mApp->onAppCmd = _handle_cmd_proxy;
 //   mApp->onInputEvent = _handle_input_proxy;
 
+    g_vertex_buffer_data[0] = { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.5f, 0.0f, 0.0f };
+    g_vertex_buffer_data[1] = { 0.0f, 1.0f, 0.0f, 0.0f, -0.5f, 0.5f, 0.0f, 0.0f };
+    g_vertex_buffer_data[2] = { 0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f, 0.0f, 0.0f };
+
     while (1) {
         int ident, events;
         struct android_poll_source* source;
@@ -432,10 +436,6 @@ void NativeEngine::setup_vertex_buffer ()
 
     LOGD("opengl vertex attribs ok\n");
 
-    g_vertex_buffer_data[0] = { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.5f, 0.0f, 0.0f };
-    g_vertex_buffer_data[1] = { 0.0f, 1.0f, 0.0f, 0.0f, -0.5f, 0.5f, 0.0f, 0.0f };
-    g_vertex_buffer_data[2] = { 0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f, 0.0f, 0.0f };
-
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_DYNAMIC_DRAW);
 }
 
@@ -623,11 +623,6 @@ void NativeEngine::DoFrame() {
         //        mgr->SetScreenSize(mSurfWidth, mSurfHeight);
         glViewport(0, 0, mSurfWidth, mSurfHeight);
 
-        load_vertex_shader();
-        load_frag_shader();
-        load_program();
-        setup_vertex_buffer();
-
         return;
     }
 
@@ -645,13 +640,17 @@ void NativeEngine::DoFrame() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     {
-        float rotate_by = 3.1415f / 100.0f;
+        static float x[3] = { 0.0f,  -0.5f, 0.5f };
+        static float y[3] = { -0.5f, 0.5f, 0.5f };
+        static float rotate_by = 0.0f;
+
+        rotate_by = fmod(rotate_by + 3.1415f / 100.0f, 2.0f*3.1415f);
         float s = sin(rotate_by);
         float c = cos(rotate_by);
 
         for (int i = 0; i < 3; i++) {
-            g_vertex_buffer_data[i].x = g_vertex_buffer_data[i].x * c - g_vertex_buffer_data[i].y * s;
-            g_vertex_buffer_data[i].y = g_vertex_buffer_data[i].x * s + g_vertex_buffer_data[i].y * c;
+            g_vertex_buffer_data[i].x = x[i] * c - y[i] * s;
+            g_vertex_buffer_data[i].y = x[i] * s + y[i] * c;
         }
     }
 
