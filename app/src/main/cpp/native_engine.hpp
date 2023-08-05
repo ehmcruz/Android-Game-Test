@@ -16,6 +16,8 @@
 #ifndef endlesstunnel_native_engine_hpp
 #define endlesstunnel_native_engine_hpp
 
+#include <list>
+#include <utility>
 #include "common.hpp"
 
 struct NativeEngineSavedState {};
@@ -31,6 +33,10 @@ struct gl_vertex_t {
     GLfloat offset_y;
 };
 
+struct Position {
+    float x, y;
+};
+
 struct TouchScreenEvent {
     enum class Type {
         Up,
@@ -40,10 +46,10 @@ struct TouchScreenEvent {
 
     Type type;
     int32_t id;
-    float min_x, min_y;
-    float max_x, max_y;
-    float x, y;
-    float nx, ny; // normalized x and y [0-1]
+    Position min, max;
+    Position pos;
+    Position norm_pos; // normalized x and y [0-1]
+    Position move_ndelta; // normalized delta
 
     GameActivityMotionEvent *motion_event;
     uint32_t pointer_index;
@@ -92,6 +98,9 @@ class NativeEngine {
 
         unsigned nn;
 
+    float orig_x[3];
+    float orig_y[3];
+
     // EGL stuff
         EGLDisplay mEglDisplay;
         EGLSurface mEglSurface;
@@ -122,6 +131,7 @@ class NativeEngine {
         // initialize context. Requires display to have been initialized first.
         bool InitContext();
 
+        std::list< std::pair<int32_t, Position> > previous_positions;
         void process_input_events ();
 
         void callback_touch_screen_event (const TouchScreenEvent& event);

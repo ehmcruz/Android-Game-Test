@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <string.h>
+
+#include <cstring>
+
+#include <string>
 #include <iostream>
 
 #include "native_engine.hpp"
@@ -50,6 +53,12 @@ NativeEngine::NativeEngine(struct android_app *app) {
     vs_loaded = false;
     fs_loaded = false;
     nn = 0;
+
+    const float orig_x_[3] = { 0.0f,  -0.5f, 0.5f };
+    const float orig_y_[3] = { -0.5f, 0.5f, 0.5f };
+
+    memcpy(this->orig_x, orig_x_, sizeof(orig_x_));
+    memcpy(this->orig_y, orig_y_, sizeof(orig_y_));
 
     if (app->savedState != NULL) {
         // we are starting with previously saved state -- restore it
@@ -93,12 +102,14 @@ bool NativeEngine::IsAnimating() {
 void NativeEngine::callback_touch_screen_event (const TouchScreenEvent& event)
 {
     const char *dir;
+    std::string complement;
 
     switch (event.type) {
         using enum TouchScreenEvent::Type;
 
         case Up:
             dir = "Up";
+
             break;
 
         case Down:
@@ -107,10 +118,17 @@ void NativeEngine::callback_touch_screen_event (const TouchScreenEvent& event)
 
         case Move:
             dir = "Move";
+            complement = "Moving " + std::to_string(event.move_ndelta.x) + ", " + std::to_string(event.move_ndelta.y);
+
+            for (int i = 0; i < 3; i++) {
+                orig_x[i] += event.move_ndelta.x;
+                orig_y[i] += event.move_ndelta.y;
+            }
+
             break;
     }
 
-    LOGD("%s event x=%.4f y=%.4f pointer_count=%u pointer_index=%u id=%i\n", dir, event.nx, event.ny, event.motion_event->pointerCount, event.pointer_index, event.id);
+    LOGD("%s event x=%.4f y=%.4f pointer_count=%u pointer_index=%u id=%i %s\n", dir, event.norm_pos.x, event.norm_pos.y, event.motion_event->pointerCount, event.pointer_index, event.id, complement.c_str());
 }
 
 void NativeEngine::process_input_events ()
@@ -133,11 +151,11 @@ void NativeEngine::process_input_events ()
                 ev.motion_event = motionEvent;
 
                 // use screen size as the motion range
-                ev.min_x = 0.0f;
-                ev.min_y = 0.0f;
+                ev.min.x = 0.0f;
+                ev.min.y = 0.0f;
 
-                ev.max_x = static_cast<float>(mSurfWidth);
-                ev.max_y = static_cast<float>(mSurfHeight);
+                ev.max.x = static_cast<float>(mSurfWidth);
+                ev.max.y = static_cast<float>(mSurfHeight);
 
                 switch (actionMasked) {
                     case AMOTION_EVENT_ACTION_DOWN:
@@ -168,10 +186,33 @@ void NativeEngine::process_input_events ()
                             //_cookEventForPointerIndex(motionEvent, callback, ev, i);
                             ev.pointer_index = i;
                             ev.id = motionEvent->pointers[i].id;
-                            ev.x = GameActivityPointerAxes_getX(&motionEvent->pointers[i]);
-                            ev.y = GameActivityPointerAxes_getY(&motionEvent->pointers[i]);
-                            ev.nx = ev.x / ev.max_x;
-                            ev.ny = ev.y / ev.max_y;
+                            ev.pos.x = GameActivityPointerAxes_getX(&motionEvent->pointers[i]);
+                            ev.pos.y = GameActivityPointerAxes_getY(&motionEvent->pointers[i]);
+                            ev.norm_pos.x = ev.pos.x / ev.max.x;
+                            ev.norm_pos.y = ev.pos.y / ev.max.y;
+
+                            // calculate motion delta
+
+                            auto it = std::find_if(
+                                    this->previous_positions.begin(),
+                                    this->previous_positions.end(),
+                                    [&ev] (const std::pair<int32_t, Position>& el) -> bool {
+                                        return el.first == ev.id;
+                                    }
+                            );
+
+                            if (it == this->previous_positions.end())
+                                LOGE("baaaaaaaaaaaaaaaaad\n");
+                            else {
+                                Position& pp = it->second;
+
+                                ev.move_ndelta.x = ev.norm_pos.x - pp.x;
+                                ev.move_ndelta.y = ev.norm_pos.y - pp.y;
+
+                                // update previous position
+                                pp.x = ev.norm_pos.x;
+                                pp.y = ev.norm_pos.y;
+                            }
 
                             this->callback_touch_screen_event(ev);
                         }
@@ -187,10 +228,38 @@ void NativeEngine::process_input_events ()
                     ev.pointer_index = pointerIndex;
                     //_cookEventForPointerIndex(motionEvent, callback, ev, pointerIndex);
                     ev.id = motionEvent->pointers[pointerIndex].id;
-                    ev.x = GameActivityPointerAxes_getX(&motionEvent->pointers[pointerIndex]);
-                    ev.y = GameActivityPointerAxes_getY(&motionEvent->pointers[pointerIndex]);
-                    ev.nx = ev.x / ev.max_x;
-                    ev.ny = ev.y / ev.max_y;
+                    ev.pos.x = GameActivityPointerAxes_getX(&motionEvent->pointers[pointerIndex]);
+                    ev.pos.y = GameActivityPointerAxes_getY(&motionEvent->pointers[pointerIndex]);
+                    ev.norm_pos.x = ev.pos.x / ev.max.x;
+                    ev.norm_pos.y = ev.pos.y / ev.max.y;
+
+                    switch (ev.type) {
+                        using enum TouchScreenEvent::Type;
+
+                        case Up: {
+                            bool found = false;
+
+                            this->previous_positions.remove_if(
+                                    [&ev, &found](const std::pair<int32_t, Position> &el) -> bool {
+                                        if (el.first == ev.id) {
+                                            found = true;
+                                            return true;
+                                        } else
+                                            return false;
+                                    }
+                            );
+
+                            if (!found)
+                                LOGE("noooooooooooooo\n");
+
+                            break;
+                        }
+
+                        case Down:
+                            std::pair<int32_t, Position> pp(ev.id, ev.norm_pos);
+                            this->previous_positions.push_back(pp);
+                            break;
+                    }
 
                     this->callback_touch_screen_event(ev);
                 }
@@ -744,8 +813,6 @@ void NativeEngine::DoFrame() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     {
-        static float x[3] = { 0.0f,  -0.5f, 0.5f };
-        static float y[3] = { -0.5f, 0.5f, 0.5f };
         static float rotate_by = 0.0f;
 
         rotate_by = fmod(rotate_by + 3.1415f / 100.0f, 2.0f*3.1415f);
@@ -753,8 +820,8 @@ void NativeEngine::DoFrame() {
         float c = cos(rotate_by);
 
         for (int i = 0; i < 3; i++) {
-            g_vertex_buffer_data[i].x = x[i] * c - y[i] * s;
-            g_vertex_buffer_data[i].y = x[i] * s + y[i] * c;
+            g_vertex_buffer_data[i].x = orig_x[i] * c - orig_y[i] * s;
+            g_vertex_buffer_data[i].y = orig_x[i] * s + orig_y[i] * c;
         }
     }
 
