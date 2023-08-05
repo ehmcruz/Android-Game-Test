@@ -49,6 +49,7 @@ NativeEngine::NativeEngine(struct android_app *app) {
     ogl_loaded = false;
     vs_loaded = false;
     fs_loaded = false;
+    nn = 0;
 
     if (app->savedState != NULL) {
         // we are starting with previously saved state -- restore it
@@ -85,19 +86,124 @@ static void _handle_cmd_proxy(struct android_app* app, int32_t cmd) {
     engine->HandleCommand(cmd);
 }
 
-static int _handle_input_proxy(struct android_app* app, AInputEvent* event) {
-    NativeEngine *engine = (NativeEngine*) app->userData;
-    return engine->HandleInput(event) ? 1 : 0;
-}
-
 bool NativeEngine::IsAnimating() {
     return mHasFocus && mIsVisible && mHasWindow;
+}
+
+void NativeEngine::callback_touch_screen_event (const TouchScreenEvent& event)
+{
+    const char *dir;
+
+    switch (event.type) {
+        using enum TouchScreenEvent::Type;
+
+        case Up:
+            dir = "Up";
+            break;
+
+        case Down:
+            dir = "Down";
+            break;
+
+        case Move:
+            dir = "Move";
+            break;
+    }
+
+    LOGD("%s event x=%.4f y=%.4f pointer_count=%u pointer_index=%u id=%i\n", dir, event.nx, event.ny, event.motion_event->pointerCount, event.pointer_index, event.id);
+}
+
+void NativeEngine::process_input_events ()
+{
+    android_input_buffer* inputBuffer = android_app_swap_input_buffers(mApp);
+
+    if (inputBuffer && inputBuffer->motionEventsCount) {
+        for (uint32_t i = 0; i < inputBuffer->motionEventsCount; ++i) {
+            GameActivityMotionEvent* motionEvent = &inputBuffer->motionEvents[i];
+
+            if (motionEvent->pointerCount > 0) {
+                const int action = motionEvent->action;
+                const int actionMasked = action & AMOTION_EVENT_ACTION_MASK;
+                // Initialize pointerIndex to the max size, we only cook an
+                // event at the end of the function if pointerIndex is set to a valid index range
+                uint32_t pointerIndex = GAMEACTIVITY_MAX_NUM_POINTERS_IN_MOTION_EVENT;
+
+                TouchScreenEvent ev;
+
+                ev.motion_event = motionEvent;
+
+                // use screen size as the motion range
+                ev.min_x = 0.0f;
+                ev.min_y = 0.0f;
+
+                ev.max_x = static_cast<float>(mSurfWidth);
+                ev.max_y = static_cast<float>(mSurfHeight);
+
+                switch (actionMasked) {
+                    case AMOTION_EVENT_ACTION_DOWN:
+                        pointerIndex = 0;
+                        ev.type = TouchScreenEvent::Type::Down;
+                        break;
+                    case AMOTION_EVENT_ACTION_POINTER_DOWN:
+                        pointerIndex = ((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                                >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+                        ev.type = TouchScreenEvent::Type::Down;
+                        break;
+                    case AMOTION_EVENT_ACTION_UP:
+                        pointerIndex = 0;
+                        ev.type = TouchScreenEvent::Type::Up;
+                        break;
+                    case AMOTION_EVENT_ACTION_POINTER_UP:
+                        pointerIndex = ((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                                >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+                        ev.type = TouchScreenEvent::Type::Up;
+                        break;
+                    case AMOTION_EVENT_ACTION_MOVE: {
+                        // Move includes all active pointers, so loop and process them here,
+                        // we do not set pointerIndex since we are cooking the events in
+                        // this loop rather than at the bottom of the function
+                        ev.type = TouchScreenEvent::Type::Move;
+
+                        for (uint32_t i = 0; i < motionEvent->pointerCount; ++i) {
+                            //_cookEventForPointerIndex(motionEvent, callback, ev, i);
+                            ev.pointer_index = i;
+                            ev.id = motionEvent->pointers[i].id;
+                            ev.x = GameActivityPointerAxes_getX(&motionEvent->pointers[i]);
+                            ev.y = GameActivityPointerAxes_getY(&motionEvent->pointers[i]);
+                            ev.nx = ev.x / ev.max_x;
+                            ev.ny = ev.y / ev.max_y;
+
+                            this->callback_touch_screen_event(ev);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+
+                // Only cook an event if we set the pointerIndex to a valid range, note that
+                // move events cook above in the switch statement.
+                if (pointerIndex != GAMEACTIVITY_MAX_NUM_POINTERS_IN_MOTION_EVENT) {
+                    ev.pointer_index = pointerIndex;
+                    //_cookEventForPointerIndex(motionEvent, callback, ev, pointerIndex);
+                    ev.id = motionEvent->pointers[pointerIndex].id;
+                    ev.x = GameActivityPointerAxes_getX(&motionEvent->pointers[pointerIndex]);
+                    ev.y = GameActivityPointerAxes_getY(&motionEvent->pointers[pointerIndex]);
+                    ev.nx = ev.x / ev.max_x;
+                    ev.ny = ev.y / ev.max_y;
+
+                    this->callback_touch_screen_event(ev);
+                }
+            }
+        }
+
+        android_app_clear_motion_events(inputBuffer);
+    }
 }
 
 void NativeEngine::GameLoop() {
     mApp->userData = this;
     mApp->onAppCmd = _handle_cmd_proxy;
-//   mApp->onInputEvent = _handle_input_proxy;
 
     g_vertex_buffer_data[0] = { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.5f, 0.0f, 0.0f };
     g_vertex_buffer_data[1] = { 0.0f, 1.0f, 0.0f, 0.0f, -0.5f, 0.5f, 0.0f, 0.0f };
@@ -121,6 +227,8 @@ void NativeEngine::GameLoop() {
                 return;
             }
         }
+
+        this->process_input_events();
 
 //        if (IsAnimating()) {
             DoFrame();
@@ -220,9 +328,6 @@ void NativeEngine::HandleCommand(int32_t cmd) {
         mEglConfig);
 }
 
-bool NativeEngine::HandleInput(AInputEvent *event) {
-    return 0;
-}
 
 bool NativeEngine::InitDisplay() {
     if (mEglDisplay != EGL_NO_DISPLAY) {
@@ -598,7 +703,6 @@ static void _log_opengl_error(GLenum err) {
 
 
 void NativeEngine::DoFrame() {
-    static unsigned nn = 0;
     // prepare to render (create context, surfaces, etc, if needed)
     if (!PrepareToRender()) {
         // not ready
@@ -661,7 +765,7 @@ void NativeEngine::DoFrame() {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     if ((nn % 50) == 0) {
-        LOGD("render frame %u\n", nn);
+        //LOGD("render frame %u\n", nn);
     }
     nn++;
 

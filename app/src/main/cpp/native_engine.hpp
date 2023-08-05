@@ -31,6 +31,24 @@ struct gl_vertex_t {
     GLfloat offset_y;
 };
 
+struct TouchScreenEvent {
+    enum class Type {
+        Up,
+        Down,
+        Move
+    };
+
+    Type type;
+    int32_t id;
+    float min_x, min_y;
+    float max_x, max_y;
+    float x, y;
+    float nx, ny; // normalized x and y [0-1]
+
+    GameActivityMotionEvent *motion_event;
+    uint32_t pointer_index;
+};
+
 class NativeEngine {
     public:
         // create an engine
@@ -72,7 +90,9 @@ class NativeEngine {
         // android API version (0 if not yet queried)
         int mApiVersion;
 
-        // EGL stuff
+        unsigned nn;
+
+    // EGL stuff
         EGLDisplay mEglDisplay;
         EGLSurface mEglSurface;
         EGLContext mEglContext;
@@ -102,6 +122,10 @@ class NativeEngine {
         // initialize context. Requires display to have been initialized first.
         bool InitContext();
 
+        void process_input_events ();
+
+        void callback_touch_screen_event (const TouchScreenEvent& event);
+
         // kill context
         void KillContext();
         void KillSurface();
@@ -123,7 +147,6 @@ class NativeEngine {
     public:
         // these are public for simplicity because we have internal static callbacks
         void HandleCommand(int32_t cmd);
-        bool HandleInput(AInputEvent *event);
 };
 
 #endif
